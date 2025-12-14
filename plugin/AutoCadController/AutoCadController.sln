@@ -1,0 +1,21 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.4.33213.234
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AutoCadController", "AutoCadController.csproj", "{E2C8F7A4-3B2D-4F4C-A6B9-3A2D9C1E8B7F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E2C8F7A4-3B2D-4F4C-A6B9-3A2D9C1E8B7F}.Debug|x64.ActiveCfg = Debug|x64
+		{E2C8F7A4-3B2D-4F4C-A6B9-3A2D9C1E8B7F}.Debug|x64.Build.0 = Debug|x64
+		{E2C8F7A4-3B2D-4F4C-A6B9-3A2D9C1E8B7F}.Release|x64.ActiveCfg = Release|x64
+		{E2C8F7A4-3B2D-4F4C-A6B9-3A2D9C1E8B7F}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
