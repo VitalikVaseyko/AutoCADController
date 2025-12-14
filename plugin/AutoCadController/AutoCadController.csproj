@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <Platforms>x86;x64</Platforms>
+    <AssemblyName>AutoCadController</AssemblyName>
+    <RootNamespace>AutoCadController</RootNamespace>
+    <OutputType>Library</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Newtonsoft used for JSON serialization -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Commands\Reconstruct3DCommand.cs" />
+    <Compile Include="Commands\Exporter.cs" />
+    <Compile Include="Commands\Importer.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- Ensure build output path -->
+    <OutputPath>..\build\</OutputPath>
+  </PropertyGroup>
+
+</Project>
