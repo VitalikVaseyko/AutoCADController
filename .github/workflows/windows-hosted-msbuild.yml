@@ -1,0 +1,48 @@
+name: Build plugin (GitHub-hosted Windows runner)
+
+# Use GitHub-hosted windows-latest runner (already includes Visual Studio & MSBuild).
+# Useful for quick CI checks (note: cannot use Autodesk SDK assemblies unless provided).
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build_plugin_windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show MSBuild info
+        shell: powershell
+        run: |
+          Get-Command msbuild | Select-Object -Property Name,Source,Path -ErrorAction SilentlyContinue
+          & msbuild /version
+
+      - name: Restore NuGet packages
+        shell: powershell
+        run: |
+          $proj = "$(pwd)\plugin\AutoCadController\AutoCadController.csproj"
+          nuget restore $proj
+
+      - name: Build with MSBuild
+        shell: powershell
+        run: |
+          $project = Join-Path $Env:GITHUB_WORKSPACE "plugin\AutoCadController\AutoCadController.csproj"
+          msbuild $project /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed with exit code $LASTEXITCODE" }
+
+      - name: Collect build artifact
+        shell: powershell
+        run: |
+          $dll = Get-ChildItem -Path plugin/AutoCadController -Filter AutoCadController.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) { Write-Output "Built DLL found: $($dll.FullName)" } else { Write-Output "Built DLL not found; check build outputs." }
+
+      - name: Upload build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-build
+          path: |
+            plugin/AutoCadController/bin/
+            plugin/AutoCadController/build/
