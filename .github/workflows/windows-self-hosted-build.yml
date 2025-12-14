@@ -1,0 +1,82 @@
+name: Build plugin (self-hosted Windows with optional auto-install of Build Tools)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build_plugin:
+    name: Build AutoCAD plugin (self-hosted Windows)
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure PowerShell script is executable
+        run: dir .\ci\install-vs-buildtools.ps1
+        shell: powershell
+
+      - name: Install Visual Studio Build Tools (if MSBuild missing)
+        shell: powershell
+        run: |
+          # check if msbuild exists (from PATH or MSBUILD_PATH env)
+          $ms = Get-Command msbuild -ErrorAction SilentlyContinue
+          if ($ms) { Write-Output "msbuild found at $($ms.Path). Skipping VS Build Tools installation."; exit 0 }
+          # If MSBUILD_PATH env present and valid, use it
+          if ($env:MSBUILD_PATH -and (Test-Path $env:MSBUILD_PATH)) {
+            Write-Output "MSBUILD_PATH environment variable present: $env:MSBUILD_PATH"
+            exit 0
+          }
+          # Otherwise run installer script (requires admin privileges on runner)
+          Write-Output "msbuild not found. Running install-vs-buildtools.ps1..."
+          .\ci\install-vs-buildtools.ps1 -InstallPath "C:\BuildTools"
+
+      - name: Show MSBuild path
+        shell: powershell
+        run: |
+          $ms = Get-Command msbuild -ErrorAction SilentlyContinue
+          if ($ms) { Write-Output "msbuild: $($ms.Path)" } else { Write-Output "msbuild not on PATH." }
+          Write-Output "MSBUILD_PATH env: $env:MSBUILD_PATH"
+
+      - name: Build plugin with MSBuild
+        shell: powershell
+        env:
+          # Use MSBUILD_PATH if set, otherwise expect msbuild in PATH
+          MSBUILD_PATH: ${{ env.MSBUILD_PATH }}
+        run: |
+          $project = Join-Path $Env:GITHUB_WORKSPACE "plugin\AutoCadController\AutoCadController.csproj"
+          if ($env:MSBUILD_PATH -and (Test-Path $env:MSBUILD_PATH)) {
+            $msbuildExe = $env:MSBUILD_PATH
+          } else {
+            $msbuildExe = "msbuild"
+          }
+          Write-Output "Using MSBuild: $msbuildExe"
+          & $msbuildExe $project /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed with exit code $LASTEXITCODE" }
+
+      - name: Package Autoloader bundle
+        shell: powershell
+        run: |
+          $dll = Get-ChildItem -Path plugin/AutoCadController -Filter AutoCadController.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) {
+            $dll = Get-ChildItem -Path plugin/AutoCadController\bin\Release -Filter AutoCadController.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $dll) { throw "Built DLL not found." }
+          $bundleSrc = Join-Path $Env:GITHUB_WORKSPACE "plugin\Autoloader\AutoCadController.bundle"
+          $bundleDst = Join-Path $Env:GITHUB_WORKSPACE "artifacts\AutoCadController.bundle"
+          if (Test-Path $bundleDst) { Remove-Item -Recurse -Force $bundleDst }
+          Copy-Item -Recurse -Force $bundleSrc $bundleDst
+          Copy-Item -Force $dll.FullName (Join-Path $bundleDst "AutoCadController.dll")
+          # Zip
+          $zipPath = Join-Path $Env:GITHUB_WORKSPACE "artifacts\AutoCadController.bundle.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($bundleDst, $zipPath)
+          Write-Output "Created bundle at: $zipPath"
+
+      - name: Upload artifact (bundle)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCadController-bundle
+          path: artifacts/AutoCadController.bundle.zip
