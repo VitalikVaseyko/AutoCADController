@@ -1,1 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+
+  build_python:
+    name: Build & Test Python server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install requirements
+        working-directory: server/fastapi_server
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run simple server import check
+        working-directory: server/fastapi_server
+        run: |
+          python - <<'PY'
+          # quick smoke test: import main and call reconstruct with sample payload
+          import json, asyncio
+          from main import app
+          print("FastAPI app imported OK")
+          # We don't run uvicorn in CI; this is just import check to catch syntax errors.
+          PY
+
+      - name: Archive Python server (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastapi_server
+          path: server/fastapi_server
+
+  build_plugin:
+    name: Build AutoCAD plugin (self-hosted Windows)
+    runs-on: [self-hosted, Windows, X64]
+    needs: build_python
+    env:
+      ACAD_SDK_PATH: ${{ secrets.ACAD_SDK_PATH }}  # Optional: path to AutoCAD SDK on runner, set as secret or runner env
+      MSBUILD_PATH: ${{ secrets.MSBUILD_PATH }}    # Optional: path to MSBuild.exe on runner; if not set, script tries to find it
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Show runner info
+        shell: powershell
+        run: |
+          Write-Output "Running on: $env:COMPUTERNAME"
+          Get-ChildItem env:
+
+      - name: Prepare AutoCAD references (optional)
+        id: prepare_refs
+        shell: powershell
+        run: |
+          if (-not $env:ACAD_SDK_PATH) {
+            Write-Output "ACAD_SDK_PATH not set as secret/runner env. Ensure AutoCAD SDK assemblies are available on the runner."
+          } else {
+            Write-Output "ACAD_SDK_PATH = $env:ACAD_SDK_PATH"
+          }
+          # create References folder in plugin project for optional local copies
+          $refsDir = Join-Path ${{ github.workspace }} "plugin\AutoCadController\References"
+          if (!(Test-Path $refsDir)) { New-Item -ItemType Directory -Path $refsDir | Out-Null }
+          # If ACAD_SDK_PATH is provided, copy acdbmgd.dll & acmgd.dll locally for project references
+          if ($env:ACAD_SDK_PATH -and (Test-Path $env:ACAD_SDK_PATH)) {
+            Copy-Item -Path (Join-Path $env:ACAD_SDK_PATH "acdbmgd.dll") -Destination $refsDir -ErrorAction SilentlyContinue
+            Copy-Item -Path (Join-Path $env:ACAD_SDK_PATH "acmgd.dll") -Destination $refsDir -ErrorAction SilentlyContinue
+            Write-Output "Copied AutoCAD DLLs to $refsDir"
+          } else {
+            Write-Warning "AutoCAD assemblies not copied. Project must reference assemblies available on runner."
+          }
+
+      - name: Build plugin with MSBuild
+        shell: powershell
+        run: |
+          $projectPath = Join-Path $env:GITHUB_WORKSPACE "plugin\AutoCadController\AutoCadController.csproj"
+          Write-Output "Project path: $projectPath"
+          # Try to find MSBuild.exe via environment or vswhere
+          if ($env:MSBUILD_PATH -and (Test-Path $env:MSBUILD_PATH)) {
+            $msbuild = $env:MSBUILD_PATH
+          } else {
+            # try vswhere to locate msbuild
+            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            if (Test-Path $vswhere) {
+              $vsPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+              if ($vsPath) {
+                $msbuild = Join-Path $vsPath "MSBuild\Current\Bin\MSBuild.exe"
+              }
+            }
+            if (-not $msbuild) {
+              # fallback to default msbuild in PATH
+              $msbuild = "msbuild"
+            }
+          }
+          Write-Output "Using MSBuild: $msbuild"
+
+          # Build with Release and x64
+          & $msbuild $projectPath /m /t:Restore,Build /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
+
+      - name: Locate output DLL
+        shell: powershell
+        run: |
+          $outdir1 = Join-Path $env:GITHUB_WORKSPACE "plugin\AutoCadController\build\"
+          $outdir2 = Join-Path $env:GITHUB_WORKSPACE "plugin\AutoCadController\bin\Release\"
+          $dll = Get-ChildItem -Path $outdir1 -Filter AutoCadController.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { $dll = Get-ChildItem -Path $outdir2 -Filter AutoCadController.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if (-not $dll) {
+            Write-Error "Could not find AutoCadController.dll. Check build logs and assembly references (acdbmgd.dll/acmgd.dll)."
+            exit 1
+          }
+          else {
+            Write-Output "Found DLL: $($dll.FullName)"
+            Write-Output "::set-output name=dllpath::$($dll.FullName)"
+          }
+
+      - name: Package Autoloader bundle
+        shell: powershell
+        run: |
+          $dll = Get-ChildItem -Path plugin/AutoCadController -Filter AutoCadController.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) {
+            # try build locations
+            $dll = Get-ChildItem -Path plugin/AutoCadController/build -Filter AutoCadController.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $dll) { Write-Error "DLL not found for packaging"; exit 1 }
+          $bundleSrc = Join-Path $env:GITHUB_WORKSPACE "plugin\Autoloader\AutoCadController.bundle"
+          $bundleDst = Join-Path $env:GITHUB_WORKSPACE "artifacts\AutoCadController.bundle"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $bundleDst
+          Copy-Item -Recurse -Force $bundleSrc $bundleDst
+          Copy-Item -Force $dll.FullName (Join-Path $bundleDst "AutoCadController.dll")
+          # zip the bundle
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "artifacts\AutoCadController.bundle.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($bundleDst, $zipPath)
+          Write-Output "Bundle created at: $zipPath"
+          Write-Output "::set-output name=bundlezip::$zipPath"
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCadController-bundle
+          path: artifacts/AutoCadController.bundle.zip
 
