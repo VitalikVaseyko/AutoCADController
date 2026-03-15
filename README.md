@@ -1,2 +1,2 @@
 # AutoCADController
-Automatic build 3D from 2D views
+Automatic build 3D models from 2D views
